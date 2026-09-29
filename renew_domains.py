@@ -619,7 +619,7 @@ def build_notifier(config):
     """按 Config 装配所有已配置的通知通道，供主流程与异常兜底共用。"""
     channels = []
     if config.sct_sendkey:
-        channels.append(PushPlusNotifier(config.sct_sendkey))
+        channels.append(ServerChanNotifier(config.sct_sendkey))
     if config.telegram_bot_token and config.telegram_chat_id:
         channels.append(TelegramNotifier(config.telegram_bot_token, config.telegram_chat_id))
     elif config.telegram_bot_token or config.telegram_chat_id:
