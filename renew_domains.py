@@ -19,7 +19,7 @@ from urllib3.util.retry import Retry
 
 DEFAULT_BASE_URL = "https://api005.dnshe.com/index.php?m=domain_hub"
 
-PUSHPLUS_URL = "https://www.pushplus.plus/send"
+SERVERCHAN_URL = "https://sctapi.ftqq.com/{sendkey}.send"
 
 TELEGRAM_API_BASE = "https://api.telegram.org"
 
@@ -100,8 +100,8 @@ def format_offset(tz):
 class Config:
     api_key: str = ""
     api_secret: str = ""
-    pushplus_token: str = ""
-    pushplus_topic: str = ""
+    sct_sendkey: str = ""
+ 
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
     base_url: str = DEFAULT_BASE_URL
@@ -119,8 +119,8 @@ class Config:
         return cls(
             api_key=text('DNSHE_API_KEY'),
             api_secret=text('DNSHE_API_SECRET'),
-            pushplus_token=text('PUSHPLUS_TOKEN'),
-            pushplus_topic=text('PUSHPLUS_TOPIC'),
+            sct_sendkey=text('SCT_KEY'),
+           
             telegram_bot_token=text('TELEGRAM_BOT_TOKEN'),
             telegram_chat_id=text('TELEGRAM_CHAT_ID'),
             base_url=text('DNSHE_API_BASE_URL') or DEFAULT_BASE_URL,
@@ -470,42 +470,49 @@ def quota_line(quota):
     return f"账户积分：{summary}"
 
 
-class PushPlusNotifier:
-    def __init__(self, token, topic='', session=None):
-        self.token = token
-        self.topic = topic
+class ServerChanNotifier:
+
+    def __init__(self, sendkey, session=None):
+        self.sendkey = (sendkey or '').strip()
         self.session = session or build_session(notify_retry())
+
+    def _mask(self, text):
+       
+        return str(text).replace(self.sendkey, '******') if self.sendkey else str(text)
 
     def send(self, content):
         """返回是否成功。本方法绝不抛异常，否则会吞掉它要上报的错误。"""
-        if not self.token:
-            print("未配置 PushPlus Token，跳过推送")
+        if not self.sendkey:
+            print("未配置 Server酱 SendKey，跳过推送")
             return True
 
         data = {
-            "token": self.token,
-            "title": "DNSHE 域名自动续期报告",
-            "content": content,
-            "template": "txt",
-            "topic": self.topic,
+            "title": "DNSHE 域名自动续期报告",  # 最长 32 字符，超长会被截断
+            # desp 按 Markdown 渲染，单个 \n 可能被折叠成同一段；
+            # 报告是逐行纯文本，改成空行分隔保证每行独立显示
+            "desp": content.replace('\n', '\n\n'),
         }
         try:
-            resp = self.session.post(PUSHPLUS_URL, json=data, timeout=REQUEST_TIMEOUT)
+            resp = self.session.post(
+                SERVERCHAN_URL.format(sendkey=self.sendkey),
+                data=data, 
+                timeout=REQUEST_TIMEOUT,
+            )
             resp.raise_for_status()
             try:
                 result = resp.json()
             except ValueError:
-                warn(f"PushPlus 返回非 JSON 内容: {(resp.text or '')[:200]}")
+                warn(f"Server酱 返回非 JSON 内容: {self._mask(resp.text or '')[:200]}")
                 return False
-            if isinstance(result, dict) and result.get('code') != 200:
-                warn(f"PushPlus 推送未成功 (code={result.get('code')}): {result.get('msg')}")
+            # Server酱成功码是 0（PushPlus 是 200），不能照搬旧判断
+            if isinstance(result, dict) and result.get('code') != 0:
+                warn(f"Server酱 推送未成功 (code={result.get('code')}): {result.get('message')}")
                 return False
-            print("PushPlus 推送成功")
+            print("Server酱 推送成功")
             return True
         except Exception as e:
-            warn(f"PushPlus 推送失败: {e}")
+            warn(f"Server酱 推送失败: {self._mask(e)}")
             return False
-
 
 def split_message(content, limit=TELEGRAM_MESSAGE_LIMIT):
     """把超长报告切成若干条不超过 limit 的消息。
@@ -611,8 +618,8 @@ class CompositeNotifier:
 def build_notifier(config):
     """按 Config 装配所有已配置的通知通道，供主流程与异常兜底共用。"""
     channels = []
-    if config.pushplus_token:
-        channels.append(PushPlusNotifier(config.pushplus_token, config.pushplus_topic))
+    if config.sct_sendkey:
+        channels.append(PushPlusNotifier(config.sct_sendkey))
     if config.telegram_bot_token and config.telegram_chat_id:
         channels.append(TelegramNotifier(config.telegram_bot_token, config.telegram_chat_id))
     elif config.telegram_bot_token or config.telegram_chat_id:
